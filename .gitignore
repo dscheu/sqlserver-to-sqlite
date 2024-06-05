@@ -1,0 +1,3 @@
+backups/*.bak
+exports/*.sqlite
+.DS_Store
