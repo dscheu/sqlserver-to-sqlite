@@ -21,9 +21,16 @@ for bak_file in $bak_files; do
     echo "File list for $db_name:"
     echo "$file_list"
 
-    # Correct parsing for logical file names
-    data_file=$(echo "$file_list" | grep -iE '_dat' | awk -F',' '{print $1}' | tr -d ' ')
-    log_file=$(echo "$file_list" | grep -iE '_log' | awk -F',' '{print $1}' | tr -d ' ')
+    data_file=""
+    log_file=""
+
+    while IFS=, read -r logical_name physical_name type rest; do
+        if [[ $type =~ .*D.* ]]; then
+            data_file=$(echo "$logical_name" | tr -d ' ')
+        elif [[ $type =~ .*L.* ]]; then
+            log_file=$(echo "$logical_name" | tr -d ' ')
+        fi
+    done <<< "$file_list"
 
     if [ -z "$data_file" ] || [ -z "$log_file" ]; then
         echo "Error: Could not determine logical file names for $db_name. Skipping."
@@ -34,7 +41,7 @@ for bak_file in $bak_files; do
     echo "Log file: $log_file"
 
     # Restore the database using the correct logical file names
-     /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $SA_PASSWORD -Q "
+    /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $SA_PASSWORD -Q "
     RESTORE DATABASE [$db_name]
     FROM DISK = '$bak_file'
     WITH MOVE '$data_file' TO '/var/opt/mssql/data/${db_name}.mdf',
