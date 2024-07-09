@@ -2,6 +2,7 @@ import pyodbc
 import pandas as pd
 import sqlite3
 import os
+import csv
 
 # Connection string to SQL Server
 conn_str = (
@@ -17,7 +18,7 @@ conn = pyodbc.connect(conn_str)
 cursor = conn.cursor()
 
 # Get list of databases
-cursor.execute("SELECT name FROM sys.databases WHERE name NOT IN ('master', 'tempdb', 'model', 'msdb')")
+cursor.execute("SELECT name FROM sys.databases WHERE name NOT IN ('master', 'tempdb', 'model', 'msdb') ORDER BY name")
 databases = cursor.fetchall()
 
 def get_foreign_keys(cursor, schema_name, table_name):
@@ -53,6 +54,52 @@ def get_table_schema(cursor, schema_name, table_name):
     """)
     return cursor.fetchall()
 
+def export_constraints_to_csv(db_cursor, db_name, schema_name, mode='w'):
+    db_cursor.execute(f"""
+        SELECT
+            tc.TABLE_SCHEMA,
+            tc.TABLE_NAME,
+            kcu.COLUMN_NAME,
+            tc.CONSTRAINT_TYPE,
+            rc.UNIQUE_CONSTRAINT_SCHEMA,
+            rc.UNIQUE_CONSTRAINT_NAME,
+            kcu2.TABLE_NAME AS REFERENCED_TABLE_NAME,
+            kcu2.COLUMN_NAME AS REFERENCED_COLUMN_NAME
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
+        LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu
+            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+        LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS AS rc
+            ON tc.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+        LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu2
+            ON rc.UNIQUE_CONSTRAINT_NAME = kcu2.CONSTRAINT_NAME
+        WHERE tc.TABLE_SCHEMA = '{schema_name}'
+        ORDER BY tc.TABLE_SCHEMA, tc.TABLE_NAME, tc.CONSTRAINT_TYPE, kcu.COLUMN_NAME
+    """)
+    constraints = db_cursor.fetchall()
+
+    csv_file = f"exports/{db_name}_constraints.csv"
+    with open(csv_file, mode=mode, newline='') as file:
+        writer = csv.writer(file)
+        if mode == 'w':  # Write header only if mode is 'w'
+            writer.writerow([
+                "Schema Name", "Table Name", "Constraint Type",
+                "Column Name", "Combined Schema, Table and Column Name",
+                "Referenced Schema", "Referenced Table Name", "Referenced Column Name",
+                "Combined Referenced Schema, Table and Column Name"
+            ])
+        for constraint in constraints:
+            (schema, table, column, constraint_type,
+             ref_schema, ref_constraint, ref_table, ref_column) = constraint
+            combined_table_name = f"{schema}.{table}"
+            combined_column_name = f"{combined_table_name}.{column}"
+            combined_ref_name = f"{ref_schema}.{ref_table}.{ref_column}" if ref_schema and ref_table and ref_column else ''
+            writer.writerow([
+                schema, table, constraint_type,
+                column, combined_column_name,
+                ref_schema, ref_table, ref_column,
+                combined_ref_name
+            ])
+
 # Loop through each database
 for db in databases:
     db_name = db[0]
@@ -71,8 +118,12 @@ for db in databases:
         SELECT s.name AS schema_name, t.name AS table_name
         FROM sys.tables t
         JOIN sys.schemas s ON t.schema_id = s.schema_id
+        ORDER BY s.name, t.name
     """)
     tables = db_cursor.fetchall()
+
+    # Extract unique schemas
+    unique_schemas = set(schema_name for schema_name, _ in tables)
 
     # Create a SQLite database
     sqlite_file = f"exports/{db_name}.sqlite"
@@ -84,6 +135,13 @@ for db in databases:
     sqlite_conn.commit()
 
     sqlite_cursor = sqlite_conn.cursor()
+
+    # Export constraints to CSV once with header for the first schema
+    first_schema = True
+    for schema_name in unique_schemas:
+        mode = 'w' if first_schema else 'a'
+        export_constraints_to_csv(db_cursor, db_name, schema_name, mode=mode)
+        first_schema = False
 
     # Export each table to the SQLite database
     for schema_name, table_name in tables:
