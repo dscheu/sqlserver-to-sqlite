@@ -123,7 +123,7 @@ for db in databases:
     tables = db_cursor.fetchall()
 
     # Extract unique schemas
-    unique_schemas = set(schema_name for schema_name, _ in tables)
+    unique_schemas = sorted(set(schema_name for schema_name, _ in tables))
 
     # Create a SQLite database
     sqlite_file = f"exports/{db_name}.sqlite"
